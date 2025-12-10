@@ -4,7 +4,7 @@ dotenv.config();
 import express from "express";
 import cors from "cors";
 import router from "./src/routes/index.js";
-import { errorHandler } from "./middleware/errorMiddleware.js";
+import { errorHandler } from "./src/middleware/errorMiddleware.js";
 
 const app = express();
 
