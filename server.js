@@ -1,6 +1,10 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import express from "express";
 import cors from "cors";
 import router from "./src/routes/index.js";
+import { errorHandler } from "./middleware/errorMiddleware.js";
 
 const app = express();
 
@@ -9,6 +13,8 @@ app.use(express.json());
 
 app.use("/", router);
 
-app.listen(5000, () => {
-  console.log("Server  running on port 5000");
+app.use(errorHandler);
+
+app.listen(process.env.PORT || 5000, () => {
+  console.log("Server running on port", process.env.PORT || 5000);
 });

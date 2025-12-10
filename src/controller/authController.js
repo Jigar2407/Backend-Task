@@ -1,136 +1,181 @@
 import db from "../config/db.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import { ErrorResponse } from "../utils/errorResponse.js";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-export const register = async (req, res) => {
+export const register = async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
 
     if (!name || !email || !password)
-      return res.status(400).json({ message: "All Fields required" });
+      return next(new ErrorResponse("All fields are required", 400));
 
-    db.query("SELECT * FROM users WHERE email = ?", [email], async (err, results) => {
-      if (err) return res.status(500).json({ error: err.message });
+    const [existing] = await db.promise().query(
+      "SELECT * FROM users WHERE email = ?",
+      [email]
+    );
 
-      if (results.length > 0) {
-        return res.status(400).json({ message: "Email already exists" });
-      }
+    if (existing.length > 0)
+      return next(new ErrorResponse("Email already exists", 400));
 
-      const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-      db.query(
-        "INSERT INTO users (name, email, password) VALUES (?, ?, ?)",
-        [name, email, hashedPassword],
-        (err, result) => {
-          if (err) return res.status(500).json({ error: err.message });
+    const [insert] = await db.promise().query(
+      "INSERT INTO users (name, email, password) VALUES (?, ?, ?)",
+      [name, email, hashedPassword]
+    );
 
-          return res.status(201).json({
-            message: "User Registered Successfully",
-            userId: result.insertId,
-          });
-        }
-      );
+    res.status(201).json({
+      success: true,
+      message: "User Registered Successfully",
+      userId: insert.insertId,
     });
 
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    next(error);
   }
 };
 
-export const Login = async (req, res) => {
-  const { email, password } = req.body;
 
-  db.query("SELECT * FROM users WHERE email = ?", [email], async (err, result) => {
-    if (err) return res.status(500).json({ error: err.message });
+export const Login = async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
 
-    if (result.length === 0)
-      return res.status(404).json({ message: "User Not Found" });
+    const [users] = await db.promise().query(
+      "SELECT * FROM users WHERE email = ?",
+      [email]
+    );
 
-    const user = result[0];
+    if (users.length === 0)
+      return next(new ErrorResponse("User Not Found", 404));
+
+    const user = users[0];
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch)
-      return res.status(401).json({ message: "Invalid Credentials" });
+      return next(new ErrorResponse("Invalid Credentials", 401));
 
     const token = jwt.sign(
-      { id: user.id, email: user.email },
-      JWT_SECRET,
-      { expiresIn: "1d" }
-    );
+  { id: user.id },
+  process.env.JWT_SECRET,     
+  { expiresIn: "7d" }
+);
 
-    return res.status(200).json({
+
+    res.status(200).json({
+      success: true,
       message: "Login Successful",
       token,
       user: { id: user.id, name: user.name, email: user.email },
     });
-  });
+
+  } catch (error) {
+    next(error);
+  }
 };
 
-export const getUsers = (req, res) => {
-  db.query(
-    "SELECT id, name, email FROM users",
-    (err, result) => {
-      if (err) return res.status(500).json({ error: err.message });
 
-      return res.status(200).json(result);
+export const getUsers = async (req, res, next) => {
+  try {
+    const [users] = await db.promise().query(
+      "SELECT id, name, email FROM users"
+    );
+
+    res.status(200).json(users);
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getMyProfile = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+
+    const [profile] = await db.promise().query(
+      "SELECT id, name, email FROM users WHERE id = ?",
+      [userId]
+    );
+
+    if (profile.length === 0)
+      return next(new ErrorResponse("User not found", 404));
+
+    res.status(200).json(profile[0]);
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getUsersPaginated = async (req, res, next) => {
+  try {
+    let { page = 1, limit = 10, search = "", email = "" } = req.query;
+
+    page = parseInt(page);
+    limit = parseInt(limit);
+    const offset = (page - 1) * limit;
+
+    let baseQuery = "SELECT id, name, email FROM users WHERE 1=1";
+    let countQuery = "SELECT COUNT(*) AS total FROM users WHERE 1=1";
+    let params = [];
+
+    if (search) {
+      baseQuery += " AND name LIKE ?";
+      countQuery += " AND name LIKE ?";
+      params.push(`%${search}%`);
     }
-  );
-};
 
-export const getMyProfile = (req, res) => {
-  const userId = req.user.id;
+    if (email) {
+      baseQuery += " AND email = ?";
+      countQuery += " AND email = ?";
+      params.push(email);
+    }
 
-  db.query("SELECT id, name, email FROM users WHERE id = ?", [userId], (err, result) => {
-    if (err) return res.status(500).json({ error: err.message });
+    baseQuery += " LIMIT ? OFFSET ?";
+    params.push(limit, offset);
 
-    return res.status(200).json(result[0]);
-  });
-};
+    const [count] = await db.promise().query(
+      countQuery,
+      params.slice(0, params.length - 2)
+    );
 
-export const getUsersPaginated = (req, res) => {
-  let { page = 1, limit = 10, search = "", email = "" } = req.query;
+    const [users] = await db.promise().query(baseQuery, params);
 
-  page = parseInt(page);
-  limit = parseInt(limit);
-  
-  const offset = (page - 1) * limit;
-
-  let baseQuery = "SELECT id, name, email FROM users WHERE 1 = 1";
-  let countQuery = "SELECT COUNT(*) AS total FROM users WHERE 1 = 1";
-  let params = [];
-
-  if (search) {
-    baseQuery += " AND name LIKE ?";
-    countQuery += " AND name LIKE ?";
-    params.push(`%${search}%`);
-  }
-
-  if (email) {
-    baseQuery += " AND email = ?";
-    countQuery += " AND email = ?";
-    params.push(email);
-  }
-
-  baseQuery += " LIMIT ? OFFSET ?";
-  params.push(limit, offset);
-
-  db.query(countQuery, params.slice(0, params.length - 2), (err, countResult) => {
-    if (err) return res.status(500).json({ error: err.message });
-
-    const totalUsers = countResult[0].total;
-
-    db.query(baseQuery, params, (err, users) => {
-      if (err) return res.status(500).json({ error: err.message });
-
-      return res.status(200).json({
-        page,
-        limit,
-        totalUsers,
-        totalPages: Math.ceil(totalUsers / limit),
-        users
-      });
+    res.status(200).json({
+      page,
+      limit,
+      totalUsers: count[0].total,
+      totalPages: Math.ceil(count[0].total / limit),
+      users
     });
-  });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const uploadProfile = async (req, res, next) => {
+  try {
+    if (!req.file)
+      return next(new ErrorResponse("No file uploaded", 400));
+
+    const userId = req.user.id;
+    const filePath = req.file.filename;
+
+    await db.promise().query(
+      "UPDATE users SET profile_image = ? WHERE id = ?",
+      [filePath, userId]
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Profile Uploaded Successfully",
+      image: filePath,
+    });
+
+  } catch (error) {
+    next(error);
+  }
 };
